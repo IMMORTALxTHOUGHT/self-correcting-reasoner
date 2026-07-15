@@ -226,7 +226,7 @@ def train(
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="runs/sft")
+    parser.add_argument("--model", default="runs/sft", help="SFT checkpoint path")
     parser.add_argument("--dataset", default="data/processed/gsm8k_train.jsonl")
     parser.add_argument("--output", default="runs/grpo")
     parser.add_argument("--num-generations", type=int, default=8)

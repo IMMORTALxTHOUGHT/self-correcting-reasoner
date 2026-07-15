@@ -16,7 +16,7 @@ from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from trl import SFTTrainer, SFTConfig
 
 
-def load_model(model_name: str, lora_r: int = 16, lora_alpha: int = 16):
+def load_model(model_name: str = "Qwen/Qwen3.5-2B", lora_r: int = 16, lora_alpha: int = 16):
     """Load model with 4-bit quantization and LoRA adapters."""
 
     bnb_config = BitsAndBytesConfig(
@@ -72,7 +72,7 @@ def prepare_dataset(dataset_path: str, tokenizer, max_seq_length: int = 2048, ev
 
 
 def train(
-    model_name: str = "Qwen/Qwen3-4B",
+    model_name: str = "Qwen/Qwen3.5-2B",
     dataset_path: str = "data/processed/gsm8k_train.jsonl",
     output_dir: str = "runs/sft",
     num_epochs: int = 3,
@@ -137,7 +137,7 @@ def train(
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="Qwen/Qwen3-4B")
+    parser.add_argument("--model", default="Qwen/Qwen3.5-2B")
     parser.add_argument("--dataset", default="data/processed/gsm8k_train.jsonl")
     parser.add_argument("--output", default="runs/sft")
     parser.add_argument("--epochs", type=int, default=3)
