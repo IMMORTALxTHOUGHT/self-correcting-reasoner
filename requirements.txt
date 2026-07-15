@@ -1,10 +1,9 @@
-# Core ML dependencies
-unsloth>=2024.4
+# Core ML
 trl>=0.16
-datasets
 transformers>=4.57
 peft
 bitsandbytes
+accelerate
 
 # Math verification
 math-verify
@@ -12,7 +11,8 @@ math-verify
 # Inference
 vllm
 
-# Data processing
+# Data
+datasets
 pandas
 numpy
 
