@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+
+# Training artifacts
+outputs/
+checkpoints/
+wandb/
+runs/
+*.pt
+*.safetensors
+*.bin
+
+# Data
+data/processed/
+data/cache/
+*.parquet
+
+# Environment
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
