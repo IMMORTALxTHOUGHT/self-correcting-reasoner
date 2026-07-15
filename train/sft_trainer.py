@@ -111,10 +111,8 @@ def train(
         save_total_limit=3,
         eval_strategy="epoch" if eval_dataset else "no",
         seed=42,
-        max_seq_length=max_seq_length,
         report_to=["tensorboard"] + (["wandb"] if use_wandb else []),
         run_name="sft-reasoner",
-        dataset_text_field="text",
     )
 
     trainer = SFTTrainer(
@@ -123,6 +121,8 @@ def train(
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         args=training_args,
+        max_seq_length=max_seq_length,
+        dataset_text_field="text",
     )
 
     print("Starting SFT training...")
