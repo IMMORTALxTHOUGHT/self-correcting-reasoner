@@ -138,7 +138,7 @@ def train(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="Qwen/Qwen3.5-2B")
-    parser.add_argument("--dataset", default="data/processed/gsm8k_train.jsonl")
+    parser.add_argument("--dataset", default="data/processed/all_train.jsonl")
     parser.add_argument("--output", default="runs/sft")
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--batch-size", type=int, default=2)
@@ -150,7 +150,9 @@ def main():
     parser.add_argument("--eval-split", type=float, default=0.1)
     parser.add_argument("--wandb", action="store_true")
     args = parser.parse_args()
-    train(**vars(args))
+    params = vars(args)
+    params["model_name"] = params.pop("model")
+    train(**params)
 
 
 if __name__ == "__main__":
