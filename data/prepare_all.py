@@ -76,7 +76,7 @@ def prepare_gsm8k():
 def prepare_math():
     print("[MATH]")
     try:
-        ds = load_dataset("hendrycks/competition_math", "main")
+        ds = load_dataset("qwedsacf/competition_math")
     except Exception as e:
         print(f"  Failed: {e}")
         return []
