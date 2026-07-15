@@ -14,7 +14,7 @@ class SFTConfig:
     """Configuration for SFT training."""
     
     # Model settings
-    base_model: str = "Qwen/Qwen3-4B"  # Fallback: "Qwen/Qwen2.5-7B-Instruct"
+    base_model: str = "Qwen/Qwen3.5-2B"  # Fallback: "Qwen/Qwen2.5-7B-Instruct"
     max_seq_length: int = 2048
     
     # QLoRA settings
@@ -54,7 +54,7 @@ class SFTConfig:
     seed: int = 42
     
     # Dataset
-    dataset_path: str = "data/processed/gsm8k_train.jsonl"
+    dataset_path: str = "data/processed/all_train.jsonl"
     eval_dataset_path: Optional[str] = "data/processed/gsm8k_test.jsonl"
     
     # Curriculum learning
@@ -92,7 +92,7 @@ class QLoRAConfig:
     task_type: str = "CAUSAL_LM"
     
     # Gradient checkpointing
-    use_gradient_checkpointing: str = "unsloth"
+    use_gradient_checkpointing: bool = True
     gradient_checkpointing_kwargs: dict = field(default_factory=lambda: {
         "use_reentrant": False
     })

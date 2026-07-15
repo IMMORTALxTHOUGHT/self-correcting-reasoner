@@ -52,7 +52,7 @@ class GRPOConfig:
     seed: int = 42
     
     # Dataset
-    dataset_path: str = "data/processed/gsm8k_train.jsonl"
+    dataset_path: str = "data/processed/all_train.jsonl"
     eval_dataset_path: Optional[str] = "data/processed/gsm8k_test.jsonl"
     
     # Reward weights

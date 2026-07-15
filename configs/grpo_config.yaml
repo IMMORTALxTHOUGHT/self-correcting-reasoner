@@ -14,7 +14,7 @@ top_k: -1
 
 # Dataset
 datasets:
-  - path: "data/processed/gsm8k_train.jsonl"
+  - path: "data/processed/all_train.jsonl"
     type: "json"
     field_messages: "messages"
 

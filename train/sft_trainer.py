@@ -74,7 +74,7 @@ def prepare_dataset(dataset_path: str, tokenizer, max_seq_length: int = 2048, ev
 
 def train(
     model_name: str = "Qwen/Qwen3.5-2B",
-    dataset_path: str = "data/processed/gsm8k_train.jsonl",
+    dataset_path: str = "data/processed/all_train.jsonl",
     output_dir: str = "runs/sft",
     num_epochs: int = 3,
     batch_size: int = 2,

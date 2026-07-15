@@ -47,71 +47,54 @@ def quantize_gguf(
     print(f"Output dir: {output_dir}")
     print(f"Quantization methods: {quantization_methods}")
     
-    # Try Unsloth export first
-    try:
-        from unsloth import FastLanguageModel
-        
-        print("\nUsing Unsloth for GGUF export...")
-        
-        # Load model
-        model, tokenizer = FastLanguageModel.from_pretrained(
-            model_name=model_path,
-            max_seq_length=2048,
-            load_in_4bit=False,
-        )
-        
-        # Export to each quantization method
-        for method in quantization_methods:
-            print(f"\nExporting with {method}...")
-            
-            output_file = output_path / f"model-{method}.gguf"
-            
-            try:
-                model.save_pretrained_gguf(
-                    str(output_path),
-                    tokenizer,
-                    quantization_method=method,
-                )
-                print(f"  Saved: {output_file}")
-            except Exception as e:
-                print(f"  Error with {method}: {e}")
-        
-        return
+    # Export using llama.cpp convert script (or ctransformers as fallback)
     
-    except ImportError:
-        print("Unsloth not available, using llama.cpp...")
-    
-    # Fallback: use llama.cpp
-    print("\nUsing llama.cpp for GGUF export...")
-    
-    # Check if llama.cpp is installed
-    try:
-        subprocess.run(["python", "-m", "llama_cpp"], capture_output=True, check=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        print("ERROR: llama.cpp not installed")
-        print("Install with: pip install llama-cpp-python")
-        print("Or clone and build: https://github.com/ggerganov/llama.cpp")
-        sys.exit(1)
-    
-    # Export using llama.cpp convert script
+    # Export using llama.cpp convert script (or ctransformers as fallback)
     for method in quantization_methods:
         print(f"\nExporting with {method}...")
-        
+
         output_file = output_path / f"model-{method}.gguf"
-        
-        # Build conversion command
-        cmd = [
-            "python", "-m", "llama_cpp",
-            "convert_hf_to_gguf.py",
-            model_path,
-            "--outfile", str(output_file),
-            "--outtype", method,
-        ]
-        
+
+        # Try the llama.cpp convert_hf_to_gguf.py script first
         try:
+            cmd = [
+                "python3", str(Path(__file__).resolve().parent.parent / "llama.cpp" / "convert_hf_to_gguf.py"),
+                model_path,
+                "--outfile", str(output_file),
+                "--outtype", method,
+            ]
             subprocess.run(cmd, check=True)
             print(f"  Saved: {output_file}")
-        except subprocess.CalledProcessError as e:
+            continue
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pass
+
+        # Fallback: try ctransformers
+        try:
+            from ctransformers import AutoModelForCausalLM as CTAutoModel
+            print(f"  ctransformers available — loading model for quantization...")
+            ct_model = CTAutoModel.from_pretrained(model_path, model_type="llama")
+            ct_model.save_pretrained(str(output_file), quantization_method=method)
+            print(f"  Saved: {output_file}")
+            continue
+        except Exception:
+            pass
+
+        # Last resort: huggingface-gguf conversion
+        try:
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+            import struct
+
+            print(f"  Using transformers fallback for {method}...")
+            model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype="auto")
+            tokenizer = AutoTokenizer.from_pretrained(model_path)
+            # Save as safetensors first, then we'd need gguf conversion
+            tmp_dir = output_path / f"_tmp_{method}"
+            model.save_pretrained(str(tmp_dir), safe_serialization=True)
+            tokenizer.save_pretrained(str(tmp_dir))
+            print(f"  Saved safetensors to {tmp_dir} — manual GGUF conversion needed for {method}")
+            print(f"  Run: python convert_hf_to_gguf.py {tmp_dir} --outfile {output_file} --outtype {method}")
+        except Exception as e:
             print(f"  Error with {method}: {e}")
     
     # Push to Hub if requested

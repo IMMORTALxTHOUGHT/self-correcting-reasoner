@@ -98,7 +98,7 @@ def prepare_dataset(dataset_path: str, tokenizer, max_seq_length: int = 2048):
 
 def train(
     model_path: str = "runs/sft",
-    dataset_path: str = "data/processed/gsm8k_train.jsonl",
+    dataset_path: str = "data/processed/all_train.jsonl",
     output_dir: str = "runs/grpo",
     num_generations: int = 8,
     beta: float = 0.1,
@@ -171,7 +171,7 @@ def train(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="runs/sft", help="SFT checkpoint path")
-    parser.add_argument("--dataset", default="data/processed/gsm8k_train.jsonl")
+    parser.add_argument("--dataset", default="data/processed/all_train.jsonl")
     parser.add_argument("--output", default="runs/grpo")
     parser.add_argument("--num-generations", type=int, default=8)
     parser.add_argument("--beta", type=float, default=0.1)
@@ -182,7 +182,19 @@ def main():
     parser.add_argument("--max-seq-length", type=int, default=2048)
     parser.add_argument("--wandb", action="store_true")
     args = parser.parse_args()
-    train(**vars(args))
+    train(
+        model_path=args.model,
+        dataset_path=args.dataset,
+        output_dir=args.output,
+        num_generations=args.num_generations,
+        beta=args.beta,
+        learning_rate=args.lr,
+        num_epochs=args.epochs,
+        batch_size=args.batch_size,
+        grad_accum=args.grad_accum,
+        max_seq_length=args.max_seq_length,
+        use_wandb=args.wandb,
+    )
 
 
 if __name__ == "__main__":

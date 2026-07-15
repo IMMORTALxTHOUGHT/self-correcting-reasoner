@@ -2,7 +2,7 @@
 # Axolotl-compatible YAML config for reference
 
 # Model
-base_model: "Qwen/Qwen3-4B"
+base_model: "Qwen/Qwen3.5-2B"
 model_type: "AutoModelForCausalLM"
 model_revision: "main"
 
@@ -23,7 +23,7 @@ lora_target_modules:
 
 # Dataset
 datasets:
-  - path: "data/processed/gsm8k_train.jsonl"
+  - path: "data/processed/all_train.jsonl"
     type: "json"
     field_messages: "messages"
 

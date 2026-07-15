@@ -160,11 +160,11 @@ def create_curriculum_datalist(
 
 if __name__ == "__main__":
     # Example: stratify GSM8K training data
-    input_file = "data/processed/gsm8k_train.jsonl"
-    
+    input_file = "data/processed/all_train.jsonl"
+
     if Path(input_file).exists():
         counts = stratify_dataset(input_file)
         print(f"\nStratification complete: {counts}")
     else:
         print(f"Input file not found: {input_file}")
-        print("Run gsm8k_prep.py first to generate the dataset.")
+        print("Run python3 data/prepare_all.py first to generate the dataset.")
