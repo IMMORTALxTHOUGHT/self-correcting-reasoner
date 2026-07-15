@@ -150,9 +150,20 @@ def main():
     parser.add_argument("--eval-split", type=float, default=0.1)
     parser.add_argument("--wandb", action="store_true")
     args = parser.parse_args()
-    params = vars(args)
-    params["model_name"] = params.pop("model")
-    train(**params)
+    train(
+        model_name=args.model,
+        dataset_path=args.dataset,
+        output_dir=args.output,
+        num_epochs=args.epochs,
+        batch_size=args.batch_size,
+        grad_accum=args.grad_accum,
+        learning_rate=args.lr,
+        max_seq_length=args.max_seq_length,
+        lora_r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        eval_split=args.eval_split,
+        use_wandb=args.wandb,
+    )
 
 
 if __name__ == "__main__":
