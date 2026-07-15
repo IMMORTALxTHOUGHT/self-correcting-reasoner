@@ -1,0 +1,74 @@
+# SFT Training Configuration
+# Axolotl-compatible YAML config for reference
+
+# Model
+base_model: "Qwen/Qwen3-4B"
+model_type: "AutoModelForCausalLM"
+model_revision: "main"
+
+# LoRA
+load_in_4bit: true
+adapter: "qlora"
+lora_r: 16
+lora_alpha: 16
+lora_dropout: 0.0
+lora_target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+
+# Dataset
+datasets:
+  - path: "data/processed/gsm8k_train.jsonl"
+    type: "json"
+    field_messages: "messages"
+
+# Chat template
+chat_template: "chatml"
+system_prompt: "You are a mathematical reasoning assistant. Think step by step."
+
+# Training
+sequence_len: 2048
+max_steps: 1000
+micro_batch_size: 2
+gradient_accumulation_steps: 8
+learning_rate: 0.0002
+lr_scheduler: "linear"
+warmup_steps: 50
+weight_decay: 0.01
+epochs: 3
+
+# Optimization
+optim: "adamw_bnb_8bit"
+bf16: true
+fp16: false
+gradient_checkpointing: true
+
+# Checkpointing
+output_dir: "runs/sft"
+save_steps: 100
+save_total_limit: 3
+logging_steps: 10
+
+# Evaluation
+eval_steps: 200
+eval_strategy: "steps"
+
+# Reproducibility
+seed: 42
+
+# Reporting
+report_to:
+  - "tensorboard"
+  - "wandb"
+
+# Special tokens
+tokens:
+  - "<thinking>"
+  - "</thinking>"
+  - "<answer>"
+  - "</answer>"

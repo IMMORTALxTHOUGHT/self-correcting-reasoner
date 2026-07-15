@@ -1,0 +1,22 @@
+# Core ML dependencies
+unsloth>=2024.4
+trl>=0.16
+datasets
+transformers>=4.57
+peft
+bitsandbytes
+
+# Math verification
+math-verify
+
+# Inference
+vllm
+
+# Data processing
+pandas
+numpy
+
+# Utilities
+tqdm
+wandb
+tensorboard
