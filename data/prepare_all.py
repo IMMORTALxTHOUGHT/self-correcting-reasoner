@@ -105,7 +105,8 @@ def prepare_math():
 def prepare_openmath():
     print("[OpenMathInstruct-2]")
     try:
-        ds = load_dataset("nvidia/OpenMathInstruct-2", split="train")
+        # Use train_1M split — faster download, 1M examples is plenty
+        ds = load_dataset("nvidia/OpenMathInstruct-2", split="train_1M")
     except Exception as e:
         print(f"  Failed: {e}")
         return []
@@ -117,14 +118,11 @@ def prepare_openmath():
     for idx in indices:
         item = ds[idx]
         problem = item.get("problem", "")
-        solution = item.get("solution", "")
+        solution = item.get("generated_solution", "")
+        answer = item.get("expected_answer", "")
 
         if not problem or not solution:
             continue
-
-        # Extract boxed answer
-        ans_match = re.search(r"\\boxed\{(.*?)\}", solution, re.DOTALL)
-        answer = ans_match.group(1).strip() if ans_match else ""
 
         records.append({
             "messages": [
