@@ -6,7 +6,9 @@ Uses TRL's GRPOTrainer with verifiable rewards (accuracy, format, self-correctio
 """
 
 import argparse
+import os
 import re
+import sys
 import time
 from typing import List, Optional
 
@@ -16,78 +18,16 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from trl import GRPOConfig, GRPOTrainer
 
+# Make the project root importable when run as `python train/grpo_trainer.py`
+# (sys.path[0] is the train/ dir, not the project root).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # ============================================================================
 # Reward Functions
 # ============================================================================
-
-def format_reward(completions: List[dict], **kwargs) -> List[float]:
-    """Reward proper <thinking>...</thinking><answer>...</answer> structure."""
-    rewards = []
-    for comp in completions:
-        content = comp[0]["content"] if isinstance(comp, list) else comp
-        score = 0.0
-        if "<thinking>" in content and "</thinking>" in content:
-            score += 0.4
-        if "<answer>" in content and "</answer>" in content:
-            score += 0.4
-        if content.count("\n") >= 2:
-            score += 0.2
-        rewards.append(score)
-    return rewards
-
-
-def self_correction_reward(completions: List[dict], **kwargs) -> List[float]:
-    """Reward genuine backtracking patterns in thinking blocks."""
-    patterns = [
-        r"wait,? let me",
-        r"actually,? i (made|was) (a )?mistake",
-        r"let me (rethink|recalculate|reconsider)",
-        r"correction:",
-        r"scratch that",
-    ]
-    rewards = []
-    for comp in completions:
-        content = comp[0]["content"] if isinstance(comp, list) else comp
-        thinking = re.search(r"<thinking>(.*?)</thinking>", content, re.DOTALL)
-        if thinking:
-            text = thinking.group(1)
-            score = 0.5 if any(re.search(p, text, re.IGNORECASE) for p in patterns) else 0.0
-            if "therefore" in text.lower():
-                score += 0.3
-            if text.count("\n") >= 3:
-                score += 0.2
-            rewards.append(min(score, 1.0))
-        else:
-            rewards.append(0.0)
-    return rewards
-
-
-def accuracy_reward(completions: List[dict], answers: List[str], **kwargs) -> List[float]:
-    """Verifiable reward using math_verify."""
-    rewards = []
-    for comp, gold in zip(completions, answers):
-        content = comp[0]["content"] if isinstance(comp, list) else comp
-        match = re.search(r"<answer>(.*?)</answer>", content, re.DOTALL)
-        if match:
-            pred = match.group(1).strip()
-            try:
-                from math_verify import parse, verify
-                ok = verify(parse(str(gold)), parse(pred))
-            except Exception:
-                ok = pred == str(gold).strip()
-            rewards.append(1.0 if ok else 0.0)
-        else:
-            rewards.append(0.0)
-    return rewards
-
-
-def combined_reward(completions: List[dict], answers: List[str], **kwargs) -> List[float]:
-    """Weighted combination of all reward signals."""
-    fmt = format_reward(completions, **kwargs)
-    corr = self_correction_reward(completions, **kwargs)
-    acc = accuracy_reward(completions, answers=answers, **kwargs)
-    return [0.3 * f + 0.3 * c + 0.4 * a for f, c, a in zip(fmt, corr, acc)]
+# The reward logic lives in the reusable `reward/` package so there is a single
+# source of truth (previously it was duplicated inline here and drifted).
+from reward.combined_reward import combined_reward  # noqa: E402
 
 
 # ============================================================================
@@ -180,7 +120,10 @@ def train(
     dataset = prepare_dataset(dataset_path, tokenizer, max_seq_length)
 
     def reward_func(completions, **kwargs):
-        return combined_reward(completions, answers=kwargs.get("answer", []))
+        # TRL passes each dataset column through as a kwarg list; `answer` holds
+        # the gold answers. Passing None lets combined_reward degrade gracefully
+        # (format + self-correction only) if answers are ever missing.
+        return combined_reward(completions, answers=kwargs.get("answer"))
 
     training_args = GRPOConfig(
         output_dir=output_dir,
@@ -197,7 +140,8 @@ def train(
         save_steps=50,
         save_total_limit=3,
         seed=42,
-        max_seq_length=max_seq_length,
+        max_prompt_length=max_seq_length // 2,
+        max_completion_length=max_seq_length,
         num_generations=num_generations,
         beta=beta,
         temperature=1.0,

@@ -7,6 +7,7 @@ Trains Qwen 3.5 4B on mathematical reasoning datasets.
 
 import argparse
 import time
+from dataclasses import fields as dataclass_fields
 from typing import Optional
 
 import torch
@@ -95,7 +96,7 @@ def train(
     model, tokenizer = load_model(model_name, lora_r, lora_alpha)
     train_dataset, eval_dataset = prepare_dataset(dataset_path, tokenizer, max_seq_length, eval_split)
 
-    training_args = SFTConfig(
+    sft_kwargs = dict(
         output_dir=output_dir,
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=grad_accum,
@@ -115,14 +116,25 @@ def train(
         run_name="sft-reasoner",
     )
 
+    # Newer TRL moved max_seq_length/dataset_text_field into SFTConfig and
+    # renamed `max_seq_length` -> `max_length`. Detect what the installed
+    # version supports so this works across trl>=0.16 through the 1.x line.
+    _sft_fields = {f.name for f in dataclass_fields(SFTConfig)}
+    if "max_length" in _sft_fields:
+        sft_kwargs["max_length"] = max_seq_length
+    elif "max_seq_length" in _sft_fields:
+        sft_kwargs["max_seq_length"] = max_seq_length
+    if "dataset_text_field" in _sft_fields:
+        sft_kwargs["dataset_text_field"] = "text"
+
+    training_args = SFTConfig(**sft_kwargs)
+
     trainer = SFTTrainer(
         model=model,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         args=training_args,
-        max_seq_length=max_seq_length,
-        dataset_text_field="text",
     )
 
     print("Starting SFT training...")
