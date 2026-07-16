@@ -49,29 +49,56 @@ def save_jsonl(records, filename):
 # GSM8K
 # ============================================================================
 
+def _gsm8k_records(split):
+    records = []
+    for item in split:
+        ans_match = re.search(r"####\s*(.+)$", item["answer"])
+        answer = ans_match.group(1).strip() if ans_match else ""
+        reasoning = re.sub(r"####\s*.+$", "", item["answer"], flags=re.MULTILINE).strip()
+        records.append({
+            "messages": [
+                {"role": "user", "content": item["question"]},
+                {"role": "assistant", "content": f"<thinking>\n{reasoning}\n</thinking>\n<answer>\n{answer}\n</answer>"}
+            ],
+            "metadata": {"dataset": "gsm8k", "answer": answer}
+        })
+    return records
+
+
 def prepare_gsm8k():
     print("[GSM8K]")
     ds = load_dataset("openai/gsm8k", "main")
-    records = []
-    for split_name in ["train", "test"]:
-        for item in ds[split_name]:
-            ans_match = re.search(r"####\s*(.+)$", item["answer"])
-            answer = ans_match.group(1).strip() if ans_match else ""
-            reasoning = re.sub(r"####\s*.+$", "", item["answer"], flags=re.MULTILINE).strip()
-            records.append({
-                "messages": [
-                    {"role": "user", "content": item["question"]},
-                    {"role": "assistant", "content": f"<thinking>\n{reasoning}\n</thinking>\n<answer>\n{answer}\n</answer>"}
-                ],
-                "metadata": {"dataset": "gsm8k", "answer": answer}
-            })
-    records = records[:MAX_GSM8K]
-    return save_jsonl(records, "gsm8k.jsonl")
+
+    # Train split feeds all_train.jsonl.
+    train_records = _gsm8k_records(ds["train"])[:MAX_GSM8K]
+    save_jsonl(train_records, "gsm8k.jsonl")
+
+    # Test split is held out for evaluation and MUST stay out of all_train.jsonl
+    # (files ending in _test.jsonl are excluded by merge_all) to avoid leakage.
+    test_records = _gsm8k_records(ds["test"])
+    save_jsonl(test_records, "gsm8k_test.jsonl")
+
+    return train_records
 
 
 # ============================================================================
 # MATH (competition_math)
 # ============================================================================
+
+def _math_records(split):
+    records = []
+    for item in split:
+        ans_match = re.search(r"\\boxed\{(.*?)\}", item["solution"], re.DOTALL)
+        answer = ans_match.group(1).strip() if ans_match else ""
+        records.append({
+            "messages": [
+                {"role": "user", "content": item["problem"]},
+                {"role": "assistant", "content": f"<thinking>\n{item['solution']}\n</thinking>\n<answer>\n{answer}\n</answer>"}
+            ],
+            "metadata": {"dataset": "math", "level": item.get("level", ""), "answer": answer}
+        })
+    return records
+
 
 def prepare_math():
     print("[MATH]")
@@ -80,22 +107,17 @@ def prepare_math():
     except Exception as e:
         print(f"  Failed: {e}")
         return []
-    records = []
-    for split_name in ["train", "test"]:
-        if split_name not in ds:
-            continue
-        for item in ds[split_name]:
-            ans_match = re.search(r"\\boxed\{(.*?)\}", item["solution"], re.DOTALL)
-            answer = ans_match.group(1).strip() if ans_match else ""
-            records.append({
-                "messages": [
-                    {"role": "user", "content": item["problem"]},
-                    {"role": "assistant", "content": f"<thinking>\n{item['solution']}\n</thinking>\n<answer>\n{answer}\n</answer>"}
-                ],
-                "metadata": {"dataset": "math", "level": item.get("level", ""), "answer": answer}
-            })
-    records = records[:MAX_MATH]
-    return save_jsonl(records, "math.jsonl")
+
+    train_records = []
+    if "train" in ds:
+        train_records = _math_records(ds["train"])[:MAX_MATH]
+        save_jsonl(train_records, "math.jsonl")
+
+    # Held-out test split (excluded from all_train.jsonl by merge_all).
+    if "test" in ds:
+        save_jsonl(_math_records(ds["test"]), "math_test.jsonl")
+
+    return train_records
 
 
 # ============================================================================
@@ -262,7 +284,8 @@ def prepare_reasoning():
 def merge_all():
     all_records = []
     for f in sorted(PROCESSED_DIR.glob("*.jsonl")):
-        if f.name == "all_train.jsonl":
+        # Skip the merge target itself and any held-out eval splits.
+        if f.name == "all_train.jsonl" or f.name.endswith("_test.jsonl"):
             continue
         with open(f) as fp:
             for line in fp:
@@ -281,7 +304,7 @@ def merge_all():
     # Print breakdown
     counts = {}
     for f in sorted(PROCESSED_DIR.glob("*.jsonl")):
-        if f.name == "all_train.jsonl":
+        if f.name == "all_train.jsonl" or f.name.endswith("_test.jsonl"):
             continue
         with open(f) as fp:
             c = sum(1 for _ in fp)

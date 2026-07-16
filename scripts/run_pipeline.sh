@@ -59,12 +59,12 @@ python3 export/merge_lora.py \
 python3 export/quantize_gguf.py \
     --model "export/merged" \
     --output "export/gguf" \
-    --methods q4_k_m q5_k_m q6_k
+    --methods q4_k_m q8_0 bf16
 
 # Step 7: Serve
 echo -e "\n[7/7] Setting up serving..."
 python3 export/serve_ollama.py \
-    --model-path "export/gguf/model-q5_k_m.gguf" \
+    --model-path "export/gguf/model-q4_k_m.gguf" \
     --model-name "self-correcting-reasoner" \
     --action create
 
