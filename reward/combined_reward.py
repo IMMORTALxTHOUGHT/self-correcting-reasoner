@@ -8,8 +8,12 @@ Combines format, self-correction, and accuracy rewards with configurable weights
 import re
 from typing import List, Dict, Any, Optional
 
-from .format_reward import format_reward, calculate_format_score
-from .self_correction_reward import self_correction_reward, calculate_correction_score
+from .format_reward import format_reward, calculate_format_score, graded_format_reward
+from .self_correction_reward import (
+    self_correction_reward,
+    calculate_correction_score,
+    graded_self_correction_reward,
+)
 from .accuracy_reward import accuracy_reward, normalize_answer
 
 
@@ -128,6 +132,38 @@ def combined_reward_detailed(
         })
     
     return results
+
+
+def graded_combined_reward(
+    completions: List[Dict[str, Any]],
+    answers: Optional[List[str]] = None,
+    weights: Optional[Dict[str, float]] = None,
+    **kwargs,
+) -> List[float]:
+    """
+    Continuous variant of combined_reward.
+
+    Uses graded_format_reward and graded_self_correction_reward instead of the
+    binary ones. These produce *intra-group* variance (different generations
+    score differently), which is what GRPO needs: with zero reward variance the
+    group-relative advantage is ~0 and the policy never updates. Accuracy stays
+    binary (exact match) since it is already a meaningful, sparse signal.
+    """
+    if weights is None:
+        weights = {"format": 0.3, "self_correction": 0.3, "accuracy": 0.4}
+
+    if answers is None:
+        answers = ["" for _ in completions]
+
+    fmt = graded_format_reward(completions, **kwargs)
+    corr = graded_self_correction_reward(completions, **kwargs)
+    acc = accuracy_reward(completions, answers, **kwargs)
+
+    return [
+        weights["format"] * f + weights["self_correction"] * c + weights["accuracy"] * a
+        for f, c, a in zip(fmt, corr, acc)
+    ]
+
 
 
 if __name__ == "__main__":

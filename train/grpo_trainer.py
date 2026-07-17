@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # ============================================================================
 # The reward logic lives in the reusable `reward/` package so there is a single
 # source of truth (previously it was duplicated inline here and drifted).
-from reward.combined_reward import combined_reward  # noqa: E402
+from reward.combined_reward import combined_reward, graded_combined_reward  # noqa: E402
 
 
 # ============================================================================
@@ -109,6 +109,7 @@ def train(
     max_seq_length: int = 2048,
     max_steps: Optional[int] = None,
     vllm_gpu_memory_utilization: float = 0.3,
+    use_graded_reward: bool = True,
     use_wandb: bool = False,
     vllm_kwargs: Optional[dict] = None,
 ):
@@ -124,9 +125,10 @@ def train(
 
     def reward_func(completions, **kwargs):
         # TRL passes each dataset column through as a kwarg list; `answer` holds
-        # the gold answers. Passing None lets combined_reward degrade gracefully
+        # the gold answers. Passing None lets the reward degrade gracefully
         # (format + self-correction only) if answers are ever missing.
-        return combined_reward(completions, answers=kwargs.get("answer"))
+        reward_fn = graded_combined_reward if use_graded_reward else combined_reward
+        return reward_fn(completions, answers=kwargs.get("answer"))
 
     from dataclasses import fields as dataclass_fields
 
@@ -187,7 +189,11 @@ def train(
     if "max_prompt_length" in _grpo_fields:
         training_args.max_prompt_length = max_seq_length // 2
     if "max_completion_length" in _grpo_fields:
-        training_args.max_completion_length = max_seq_length
+        # 512 was clipping ~26% of generations (truncating before <answer>),
+        # so default the cap higher. Honour an explicit override via the env if set.
+        import os as _os
+        cap = int(_os.environ.get("GRPO_MAX_COMPLETION", "768"))
+        training_args.max_completion_length = cap
     if "max_seq_length" in _grpo_fields:
         training_args.max_seq_length = max_seq_length
 
@@ -229,6 +235,9 @@ def main():
     parser.add_argument("--max-seq-length", type=int, default=512)
     parser.add_argument("--max-steps", type=int, default=None,
                         help="Cap training steps (use e.g. 50 for a quick speed/reward probe)")
+    parser.add_argument("--reward", choices=["combined", "graded"], default="graded",
+                        help="'combined' = original binary rewards; 'graded' = continuous "
+                             "rewards that give GRPO intra-group variance (default: graded)")
     parser.add_argument("--vllm-util", type=float, default=0.3,
                         help="Fraction of GPU VRAM for the vLLM generation engine")
     parser.add_argument("--wandb", action="store_true")
@@ -246,6 +255,7 @@ def main():
         max_seq_length=args.max_seq_length,
         max_steps=args.max_steps,
         vllm_gpu_memory_utilization=args.vllm_util,
+        use_graded_reward=(args.reward == "graded"),
         use_wandb=args.wandb,
     )
 

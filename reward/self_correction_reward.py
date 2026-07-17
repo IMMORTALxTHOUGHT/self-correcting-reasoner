@@ -75,7 +75,53 @@ def self_correction_reward(completions: List[Dict[str, Any]], **kwargs) -> List[
             rewards.append(min(score, 1.0))
         else:
             rewards.append(0.0)
-    
+
+    return rewards
+
+
+def graded_self_correction_reward(completions: List[Dict[str, Any]], **kwargs) -> List[float]:
+    """
+    Continuous self-correction reward that yields intra-group variance.
+
+    The binary self_correction_reward is match/no-match, so once the model
+    settles into a pattern it scores identically across a group and GRPO's
+    reward std collapses to 0. This variant counts *how many distinct*
+    backtracking cues appear (graded, with diminishing returns) plus a graded
+    elaboration bonus, so generations with more genuine self-correction score
+    higher and the policy gets a real advantage signal.
+    """
+    rewards = []
+    for comp in completions:
+        if isinstance(comp, list):
+            content = comp[0]["content"]
+        elif isinstance(comp, dict):
+            content = comp.get("content", "")
+        else:
+            content = str(comp)
+
+        thinking_match = re.search(r"<thinking>(.*?)</thinking>", content, re.DOTALL)
+        if not thinking_match:
+            rewards.append(0.0)
+            continue
+
+        thinking = thinking_match.group(1)
+
+        # Count *distinct* backtracking cues (graded, diminishing returns).
+        hits = sum(
+            1 for p in BACKTRACKING_PATTERNS
+            if re.search(p, thinking, re.IGNORECASE)
+        )
+        score = 0.5 * (1.0 - 0.5 ** hits) if hits else 0.0  # 0,0.25,0.375,0.4375,...
+
+        # Structured-correction cue (graded, small).
+        if "→" in thinking or "therefore" in thinking.lower():
+            score += 0.2
+
+        # Elaboration: more genuine reasoning lines -> slightly higher.
+        n_lines = len([l for l in thinking.split("\n") if l.strip()])
+        score += min(n_lines / 20.0, 0.2)  # up to +0.2 for ~20 lines
+
+        rewards.append(min(score, 1.0))
     return rewards
 
 
