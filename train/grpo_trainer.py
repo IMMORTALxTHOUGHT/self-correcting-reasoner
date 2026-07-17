@@ -157,6 +157,28 @@ def train(
         # reward package (which expects text) always sees real content.
         texts = [_to_text(c) for c in completions]
         reward_fn = graded_combined_reward if use_graded_reward else combined_reward
+
+        # DEBUG (one-time): dump the real call shape so we can see what TRL
+        # actually passes. Remove once the reward is confirmed non-zero.
+        if not getattr(_wrapped_reward, "_debugged", False):
+            _wrapped_reward._debugged = True
+            try:
+                import json
+                sample = {
+                    "completion_type": type(completions[0]).__name__ if completions else None,
+                    "completion_sample": completions[0] if completions else None,
+                    "text_sample": texts[0][:500] if texts else None,
+                    "kwargs_keys": list(kwargs.keys()),
+                    "answer_sample": kwargs.get("answer"),
+                    "answer_type": type(kwargs.get("answer")).__name__,
+                    "reward_out_sample": reward_fn(texts, answers=kwargs.get("answer"))[:3],
+                }
+                with open("reward_debug.json", "w") as dbg:
+                    json.dump(sample, dbg, default=str, indent=2)
+                print("DEBUG reward call written to reward_debug.json")
+            except Exception as de:
+                print(f"DEBUG failed: {de}")
+
         try:
             return reward_fn(texts, answers=kwargs.get("answer"))
         except Exception as e:
