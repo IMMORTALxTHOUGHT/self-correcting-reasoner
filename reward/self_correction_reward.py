@@ -83,12 +83,10 @@ def graded_self_correction_reward(completions: List[Dict[str, Any]], **kwargs) -
     """
     Continuous self-correction reward that yields intra-group variance.
 
-    The binary self_correction_reward is match/no-match, so once the model
-    settles into a pattern it scores identically across a group and GRPO's
-    reward std collapses to 0. This variant counts *how many distinct*
-    backtracking cues appear (graded, with diminishing returns) plus a graded
-    elaboration bonus, so generations with more genuine self-correction score
-    higher and the policy gets a real advantage signal.
+    Works whether or not the model emits <thinking> tags: it scans the whole
+    completion for backtracking/self-correction cues, graded by how many
+    distinct cues appear (diminishing returns) plus a structured-correction
+    and elaboration bonus. Plain markdown reasoning still scores.
     """
     rewards = []
     for comp in completions:
@@ -99,26 +97,22 @@ def graded_self_correction_reward(completions: List[Dict[str, Any]], **kwargs) -
         else:
             content = str(comp)
 
-        thinking_match = re.search(r"<thinking>(.*?)</thinking>", content, re.DOTALL)
-        if not thinking_match:
-            rewards.append(0.0)
-            continue
-
-        thinking = thinking_match.group(1)
+        # Search the whole completion (not just a <thinking> block).
+        region = content
 
         # Count *distinct* backtracking cues (graded, diminishing returns).
         hits = sum(
             1 for p in BACKTRACKING_PATTERNS
-            if re.search(p, thinking, re.IGNORECASE)
+            if re.search(p, region, re.IGNORECASE)
         )
         score = 0.5 * (1.0 - 0.5 ** hits) if hits else 0.0  # 0,0.25,0.375,0.4375,...
 
         # Structured-correction cue (graded, small).
-        if "→" in thinking or "therefore" in thinking.lower():
+        if "→" in region or "therefore" in region.lower():
             score += 0.2
 
         # Elaboration: more genuine reasoning lines -> slightly higher.
-        n_lines = len([l for l in thinking.split("\n") if l.strip()])
+        n_lines = len([l for l in region.split("\n") if l.strip()])
         score += min(n_lines / 20.0, 0.2)  # up to +0.2 for ~20 lines
 
         rewards.append(min(score, 1.0))

@@ -56,13 +56,13 @@ def format_reward(completions: List[Dict[str, Any]], **kwargs) -> List[float]:
 
 def graded_format_reward(completions: List[Dict[str, Any]], **kwargs) -> List[float]:
     """
-    Continuous format reward that yields *intra-group* variance.
+    Continuous format reward that yields *intra-group* variance AND works even
+    when the model does not emit the <thinking>/<answer> tags.
 
-    The binary format_reward saturates at 1.0 for almost every post-SFT
-    completion, which collapses GRPO's group reward std to 0. This graded
-    variant rewards partial / graded structure so different generations score
-    differently (proper tag ordering, a non-empty <thinking> and <answer>,
-    and answer length), giving the policy a real advantage signal.
+    The tags are treated as *bonuses* (correct structure is encouraged) rather
+    than hard requirements: if absent, the model still scores from its
+    reasoning text. This avoids the all-zero reward that occurs when a model
+    answers in plain markdown and the previous binary reward found no tags.
     """
     rewards = []
     for comp in completions:
@@ -79,33 +79,69 @@ def graded_format_reward(completions: List[Dict[str, Any]], **kwargs) -> List[fl
         has_open_a = "<answer>" in content
         has_close_a = "</answer>" in content
 
-        # Tags present (each worth 0.25), with a bonus for correct ordering.
-        if has_open_t:
-            score += 0.25
-        if has_close_t:
-            score += 0.25
-        if has_open_a:
-            score += 0.25
-        if has_close_a:
-            score += 0.25
-        # Correct ordering: </thinking> must precede <answer>.
+        # Tag presence bonuses (each worth 0.2), plus ordering bonus.
+        tag_score = 0.0
+        tag_score += 0.2 if has_open_t else 0.0
+        tag_score += 0.2 if has_close_t else 0.0
+        tag_score += 0.2 if has_open_a else 0.0
+        tag_score += 0.2 if has_close_a else 0.0
         if has_close_t and has_open_a and content.index("</thinking>") < content.index("<answer>"):
-            score += 0.1
+            tag_score += 0.1
+        score += tag_score
 
-        # Non-empty thinking body (rewards elaboration, varies by generation).
-        t_match = re.search(r"<thinking>(.*?)</thinking>", content, re.DOTALL)
-        if t_match:
-            t_len = len(t_match.group(1).strip())
-            score += min(t_len / 200.0, 0.1)  # up to +0.1 for ~200 chars
+        # Always reward substance so untagged (markdown) outputs still score:
+        # non-empty reasoning body + a concrete final answer candidate.
+        t_len = len(content.strip())
+        score += min(t_len / 400.0, 0.2)  # up to +0.2 for ~400 chars of reasoning
 
-        # Non-empty answer body.
-        a_match = re.search(r"<answer>(.*?)</answer>", content, re.DOTALL)
-        if a_match:
-            a_len = len(a_match.group(1).strip())
-            score += min(a_len / 20.0, 0.1)  # up to +0.1 for ~20 chars
+        a = _extract_final_answer(content)
+        if a:
+            score += 0.2  # produced an extractable final answer
 
         rewards.append(min(score, 1.0))
     return rewards
+
+
+def _extract_final_answer(text: str) -> str:
+    """Robustly pull the model's final answer out of arbitrary output.
+
+    Tries, in order: <answer> tags, \\boxed{}, a **bold** final value, the last
+    dollar/number on the last line, then the last number in the text. Returns
+    '' if nothing numeric is found. Strips $, commas, and surrounding markdown.
+    """
+    if not text:
+        return ""
+
+    # 1) <answer> ... </answer>
+    m = re.search(r"<answer>(.*?)</answer>", text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+
+    # 2) \boxed{...}
+    m = re.search(r"\\boxed\{(.*?)\}", text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+
+    # 3) Last **bold** token (markdown final answer), e.g. "**$96**"
+    bolds = re.findall(r"\*\*(.+?)\*\*", text)
+    if bolds:
+        last = bolds[-1].strip()
+        if re.search(r"\d", last):
+            return last
+
+    # 4) Last line: a trailing $number or bare number
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if lines:
+        nums = re.findall(r"\$?-?[\d,]+(?:\.\d+)?", lines[-1])
+        if nums:
+            return nums[-1].replace(",", "")
+
+    # 5) Last number anywhere
+    all_nums = re.findall(r"\$?-?[\d,]+(?:\.\d+)?", text)
+    if all_nums:
+        return all_nums[-1].replace(",", "")
+
+    return ""
 
 
 

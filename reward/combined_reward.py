@@ -8,7 +8,12 @@ Combines format, self-correction, and accuracy rewards with configurable weights
 import re
 from typing import List, Dict, Any, Optional
 
-from .format_reward import format_reward, calculate_format_score, graded_format_reward
+from .format_reward import (
+    format_reward,
+    calculate_format_score,
+    graded_format_reward,
+    _extract_final_answer,
+)
 from .self_correction_reward import (
     self_correction_reward,
     calculate_correction_score,
@@ -157,7 +162,29 @@ def graded_combined_reward(
 
     fmt = graded_format_reward(completions, **kwargs)
     corr = graded_self_correction_reward(completions, **kwargs)
-    acc = accuracy_reward(completions, answers, **kwargs)
+
+    # Accuracy: derive each prediction from the *actual* generation (tags are
+    # optional) so it works for markdown answers too. Uses math_verify when
+    # available, else numeric/normalized comparison. This is now a sparse but
+    # real signal that varies within a group (some samples get it right).
+    acc = []
+    for comp, gold in zip(completions, answers):
+        if isinstance(comp, list):
+            text = comp[0]["content"]
+        elif isinstance(comp, dict):
+            text = comp.get("content", "")
+        else:
+            text = str(comp)
+        pred = _extract_final_answer(text)
+        if not pred or not str(gold).strip():
+            acc.append(0.0)
+            continue
+        try:
+            from math_verify import parse, verify
+            ok = verify(parse(str(gold)), parse(pred))
+        except Exception:
+            ok = normalize_answer(pred) == normalize_answer(str(gold))
+        acc.append(1.0 if ok else 0.0)
 
     return [
         weights["format"] * f + weights["self_correction"] * c + weights["accuracy"] * a
