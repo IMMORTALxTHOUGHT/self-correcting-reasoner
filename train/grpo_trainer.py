@@ -153,7 +153,9 @@ def train(
         # with a vLLM engine instead of the training model in eager mode (the
         # single biggest GRPO speedup on one GPU). Different TRL versions expose
         # these under different names, so only pass what this version accepts.
-        generation_batch_size=8,  # batch the N generations per prompt together
+        # generation_batch_size must be divisible by num_generations, so tie it
+        # to num_generations (one batched call emits the whole group).
+        generation_batch_size=num_generations,
         report_to=["tensorboard"] + (["wandb"] if use_wandb else []),
         run_name="grpo-reasoner",
     )
