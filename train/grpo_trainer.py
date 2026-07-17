@@ -107,6 +107,8 @@ def train(
     batch_size: int = 1,
     grad_accum: int = 8,
     max_seq_length: int = 2048,
+    max_steps: Optional[int] = None,
+    vllm_gpu_memory_utilization: float = 0.3,
     use_wandb: bool = False,
 ):
     """Run GRPO training."""
@@ -125,6 +127,8 @@ def train(
         # (format + self-correction only) if answers are ever missing.
         return combined_reward(completions, answers=kwargs.get("answer"))
 
+    from dataclasses import fields as dataclass_fields
+
     training_args = GRPOConfig(
         output_dir=output_dir,
         per_device_train_batch_size=batch_size,
@@ -140,15 +144,39 @@ def train(
         save_steps=50,
         save_total_limit=3,
         seed=42,
-        max_prompt_length=max_seq_length // 2,
-        max_completion_length=max_seq_length,
         num_generations=num_generations,
         beta=beta,
         temperature=1.0,
         top_p=0.95,
+        # --- Speed: generate completions with a vLLM engine instead of the
+        # training model in eager mode. This is the single biggest GRPO speedup
+        # on a single GPU. Keep util low enough to leave room for the training
+        # model + reference model + optimizer in the remaining VRAM.
+        vllm_device="cuda:0",
+        vllm_gpu_memory_utilization=vllm_gpu_memory_utilization,
+        generation_batch_size=8,  # batch the N generations per prompt together
         report_to=["tensorboard"] + (["wandb"] if use_wandb else []),
         run_name="grpo-reasoner",
     )
+
+    if max_steps is not None:
+        training_args.max_steps = max_steps
+
+    # Set completion length — the model needs enough room to produce
+    # <thinking>...</thinking><answer>...</answer> without truncation.
+    _grpo_fields = {f.name for f in dataclass_fields(GRPOConfig)}
+    if "max_prompt_length" in _grpo_fields:
+        training_args.max_prompt_length = max_seq_length // 2
+    if "max_completion_length" in _grpo_fields:
+        training_args.max_completion_length = max_seq_length
+    if "max_seq_length" in _grpo_fields:
+        training_args.max_seq_length = max_seq_length
+
+    # Debug: print what TRL version supports
+    print(f"GRPOConfig fields with 'max': {[f for f in _grpo_fields if 'max' in f]}")
+    print(f"max_prompt_length: {getattr(training_args, 'max_prompt_length', 'N/A')}")
+    print(f"max_completion_length: {getattr(training_args, 'max_completion_length', 'N/A')}")
+    print(f"max_seq_length: {getattr(training_args, 'max_seq_length', 'N/A')}")
 
     trainer = GRPOTrainer(
         model=model,
@@ -177,9 +205,13 @@ def main():
     parser.add_argument("--beta", type=float, default=0.1)
     parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--epochs", type=int, default=1)
-    parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--grad-accum", type=int, default=8)
-    parser.add_argument("--max-seq-length", type=int, default=2048)
+    parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--grad-accum", type=int, default=2)
+    parser.add_argument("--max-seq-length", type=int, default=512)
+    parser.add_argument("--max-steps", type=int, default=None,
+                        help="Cap training steps (use e.g. 50 for a quick speed/reward probe)")
+    parser.add_argument("--vllm-util", type=float, default=0.3,
+                        help="Fraction of GPU VRAM for the vLLM generation engine")
     parser.add_argument("--wandb", action="store_true")
     args = parser.parse_args()
     train(
@@ -193,6 +225,8 @@ def main():
         batch_size=args.batch_size,
         grad_accum=args.grad_accum,
         max_seq_length=args.max_seq_length,
+        max_steps=args.max_steps,
+        vllm_gpu_memory_utilization=args.vllm_util,
         use_wandb=args.wandb,
     )
 

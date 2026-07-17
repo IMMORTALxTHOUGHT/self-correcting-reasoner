@@ -21,10 +21,12 @@
 
 ### What This Project Does
 
-This project takes a base language model (Qwen 3.5 4B) and post-trains it to excel at mathematical reasoning with self-correcting capabilities. The pipeline has two main training phases:
+This project takes a base language model (Qwen 3.5 2B) and post-trains it to excel at mathematical reasoning with self-correcting capabilities. The pipeline has two main training phases:
 
 1. **SFT (Supervised Fine-Tuning)**: Teaches the model formatting and domain knowledge
 2. **GRPO (Group Relative Policy Optimization)**: Aligns the model to produce logical, self-correcting reasoning paths
+
+**Stack**: PEFT + BitsAndBytes (QLoRA) + TRL. No Unsloth.
 
 ### Why Mathematical Reasoning?
 
@@ -38,19 +40,20 @@ Mathematical reasoning is ideal for this project because:
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        DATA PIPELINE                            │
-│  GSM8K/MATH → Format with tags → Curriculum split → JSONL       │
+│  6 sources (GSM8K/MATH/OpenMath/Fable5/Mythos/Reasoning)       │
+│  → prepare_all.py → Format with tags → ~90K JSONL              │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                     SFT TRAINING (Phase 1)                      │
-│  Qwen 3.5 4B + QLoRA → Train on formatted data → Checkpoint     │
+│  Qwen 3.5 2B + QLoRA (PEFT) → Train on formatted data → runs/sft│
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    GRPO ALIGNMENT (Phase 2)                     │
-│  SFT Checkpoint → Sample groups → Reward scoring → Update model  │
+│  SFT Checkpoint → Sample groups → Reward scoring → runs/grpo    │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -179,6 +182,7 @@ Yes, 180 is correct.
 self-correcting-reasoner/
 │
 ├── data/                          # Data preparation
+│   ├── prepare_all.py             # Unified prep for all 6 sources
 │   ├── gsm8k_prep.py             # GSM8K dataset processing
 │   ├── math_prep.py              # MATH dataset processing
 │   ├── synthetic_traces.py       # Generate reasoning traces
@@ -186,22 +190,23 @@ self-correcting-reasoner/
 │
 ├── train/                         # Training scripts
 │   ├── sft_config.py             # SFT hyperparameters
-│   ├── sft_trainer.py            # SFT training loop
+│   ├── sft_trainer.py            # SFT training loop (PEFT + TRL)
 │   ├── grpo_config.py            # GRPO hyperparameters
-│   └── grpo_trainer.py           # GRPO training loop
+│   └── grpo_trainer.py           # GRPO training loop (TRL GRPOTrainer)
 │
-├── reward/                        # Reward functions
+├── reward/                        # Reward functions (importable package)
+│   ├── __init__.py               # Package init, single source of truth
 │   ├── format_reward.py          # Format compliance
 │   ├── self_correction_reward.py # Backtracking detection
-│   ├── accuracy_reward.py        # Answer verification
+│   ├── accuracy_reward.py        # Answer verification (math_verify)
 │   └── combined_reward.py        # Weighted combination
 │
 ├── eval/                          # Evaluation
-│   ├── benchmark.py              # Pass@1 accuracy
+│   ├── benchmark.py              # Pass@1 accuracy (vLLM)
 │   └── clr_eval.py              # Claim-Level Reliability
 │
 ├── export/                        # Model deployment
-│   ├── merge_lora.py             # Merge LoRA weights
+│   ├── merge_lora.py             # Merge LoRA (auto-discovers base model)
 │   ├── quantize_gguf.py          # GGUF quantization
 │   ├── serve_vllm.py             # vLLM serving
 │   └── serve_ollama.py           # Ollama integration
@@ -213,39 +218,40 @@ self-correcting-reasoner/
 ├── scripts/                       # Automation
 │   └── run_pipeline.sh           # End-to-end pipeline
 │
-└── docs/                          # Documentation
-    ├── ARCHITECTURE.md           # This file
-    ├── methodology.md            # Methodology summary
-    └── results.md                # Experimental results
+├── docs/                          # Documentation
+│   ├── ARCHITECTURE.md           # This file
+│   ├── methodology.md            # Methodology summary
+│   └── results.md                # Experimental results
+│
+└── requirements.txt               # Python dependencies
 ```
 
 ### 3.2 Data Flow
 
 ```
-Raw Datasets (GSM8K, MATH)
+Raw Datasets (6 sources)
+├── GSM8K (~8K)           - foundational math
+├── MATH (~15K)           - competition math
+├── OpenMathInstruct-2    - large-scale math traces (50K sampled)
+├── Fable-5-traces (~5K)  - agent reasoning
+├── Claude Mythos (~5K)   - distilled reasoning/science/planning
+└── Reasoning Summaries   - mixed reasoning (10K filtered)
          │
          ▼
 ┌─────────────────────────┐
-│   Data Preparation      │
+│   prepare_all.py        │
 │   - Format with tags    │
-│   - Clean/Lint          │
+│   - Filter/clean        │
 │   - Add metadata        │
-└─────────────────────────┘
-         │
-         ▼
-┌─────────────────────────┐
-│   Curriculum Split      │
-│   - Easy (1-2 steps)    │
-│   - Medium (3-5 steps)  │
-│   - Hard (6+ steps)     │
+│   - Cap per source      │
 └─────────────────────────┘
          │
          ▼
 ┌─────────────────────────┐
 │   JSONL Files           │
-│   - gsm8k_train.jsonl   │
-│   - gsm8k_test.jsonl    │
-│   - curriculum/*.jsonl  │
+│   - all_train.jsonl     │  ← ~90K examples merged
+│   - {source}.jsonl      │  ← individual source files
+│   - curriculum/*.jsonl  │  ← optional difficulty split
 └─────────────────────────┘
          │
          ▼
@@ -260,7 +266,7 @@ Raw Datasets (GSM8K, MATH)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Base Model (Qwen 3.5 4B)                 │
+│                    Base Model (Qwen 3.5 2B)                  │
 │  ┌─────────────────────────────────────────────────────┐   │
 │  │                  Transformer Layers                  │   │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  │   │
@@ -290,32 +296,31 @@ Raw Datasets (GSM8K, MATH)
 
 ## 4. Data Pipeline
 
-### 4.1 GSM8K Dataset
+### 4.1 Unified Data Preparation
 
-**Source**: OpenAI's Grade School Math 8K
+**File**: `data/prepare_all.py`
 
-**Format**:
-```json
-{
-  "question": "Janet's ducks lay 16 eggs per day...",
-  "answer": "She bakes 4 dozen muffins...\n#### 60"
-}
-```
+**Sources** (capped for 24GB single-GPU training):
 
-**Processing** (`data/gsm8k_prep.py`):
-1. Load dataset from HuggingFace
-2. Extract numerical answer after `####`
-3. Format with `<thinking>` and `<answer>` tags
-4. Save as JSONL
+| Source | HuggingFace ID | Cap | Content |
+|--------|----------------|-----|---------|
+| GSM8K | `openai/gsm8k` | 8K | Foundational math word problems |
+| MATH | `qwedsacf/competition_math` | 15K | Competition-level math |
+| OpenMathInstruct-2 | `nvidia/OpenMathInstruct-2` (train_1M) | 50K | Large-scale math traces |
+| Fable-5-traces | `Glint-Research/Fable-5-traces` | 5K | Agent reasoning traces |
+| Claude Mythos | `WithinUsAI/claude_mythos_distilled_25k` | 5K | Distilled math/science/planning |
+| Reasoning Summaries | `SupraLabs/reasoning-summaries-61k` | 10K | Mixed math/code reasoning |
 
-**Output format**:
+**Total**: ~90K examples merged into `all_train.jsonl`
+
+**Output format** (all sources):
 ```json
 {
   "messages": [
-    {"role": "user", "content": "Janet's ducks lay 16 eggs..."},
-    {"role": "assistant", "content": "<thinking>\nJanet has 16 ducks...\n</thinking>\n<answer>\n60\n</answer>"}
+    {"role": "user", "content": "..."},
+    {"role": "assistant", "content": "<thinking>\n...\n</thinking>\n<answer>\n...\n</answer>"}
   ],
-  "metadata": {"dataset": "gsm8k", "answer": "60"}
+  "metadata": {"dataset": "source_name", "answer": "..."}
 }
 ```
 
@@ -368,24 +373,29 @@ def estimate_difficulty(record):
 **File**: `train/sft_trainer.py`
 
 ```python
-# Load with Unsloth (optimized)
-model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name="Qwen/Qwen3-4B",
-    max_seq_length=2048,
+# Load with 4-bit quantization (BitsAndBytes)
+bnb_config = BitsAndBytesConfig(
     load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.bfloat16,
+    bnb_4bit_use_double_quant=True,
 )
 
-# Add LoRA adapters
-model = FastLanguageModel.get_peft_model(
-    model,
+model = AutoModelForCausalLM.from_pretrained(
+    "Qwen/Qwen3.5-2B",
+    quantization_config=bnb_config,
+    device_map="auto",
+)
+
+# Add LoRA adapters (PEFT)
+model = get_peft_model(model, LoraConfig(
     r=16,
     lora_alpha=16,
     target_modules=[
         "q_proj", "k_proj", "v_proj", "o_proj",
         "gate_proj", "up_proj", "down_proj"
     ],
-    use_gradient_checkpointing="unsloth",
-)
+))
 ```
 
 ### 5.2 Training Configuration
@@ -404,35 +414,37 @@ training_args = SFTConfig(
 )
 ```
 
-### 5.3 Response-Only Training
+### 5.3 TRL Version Compatibility
 
-**Important**: Only train on assistant responses, not user prompts.
+The SFT trainer auto-detects the installed TRL version to handle API changes:
 
 ```python
-trainer = train_on_responses_only(
-    trainer,
-    instruction_part="<|im_start|>user\n",
-    response_part="<|im_start|>assistant\n",
-)
+_sft_fields = {f.name for f in dataclass_fields(SFTConfig)}
+if "max_length" in _sft_fields:
+    sft_kwargs["max_length"] = max_seq_length      # TRL 1.x
+elif "max_seq_length" in _sft_fields:
+    sft_kwargs["max_seq_length"] = max_seq_length   # TRL 0.16+
+if "dataset_text_field" in _sft_fields:
+    sft_kwargs["dataset_text_field"] = "text"
 ```
 
-**Why**: We don't want the model to learn to generate user prompts.
+This ensures the code works across `trl>=0.16` through the 1.x line.
 
-### 5.4 VRAM Management
+### 5.3 VRAM Management
 
-**A10G (24GB) allocation**:
-- Base model (4-bit): ~2GB
-- LoRA adapters: ~100MB
-- Optimizer states: ~500MB
-- Activations (with grad checkpointing): ~10GB
-- Batch data: ~2GB
-- **Total**: ~13GB (fits comfortably)
+**A5000 (24GB) allocation**:
+- Base model (4-bit): ~1.5GB
+- LoRA adapters: ~50MB
+- Optimizer states: ~300MB
+- Activations (with grad checkpointing): ~8GB
+- Batch data: ~1.5GB
+- **Total**: ~12GB (fits comfortably)
 
 **Optimizations**:
-- 4-bit quantization (NF4)
+- 4-bit quantization (NF4 + double quant)
 - Gradient checkpointing
 - AdamW 8-bit optimizer
-- Small batch size with gradient accumulation
+- Small batch size (2) with gradient accumulation (8) → effective batch = 16
 
 ---
 
@@ -480,7 +492,7 @@ for comp, reward in zip(completions, rewards):
 | Stability | More stable | Can be unstable |
 | Compute | Higher | Lower |
 
-**Why GRPO for this project**: Single A10G can't fit both policy + critic models.
+**Why GRPO for this project**: Single A5000 can't fit both policy + critic models.
 
 ### 6.3 KL Penalty
 
@@ -498,6 +510,8 @@ kl_penalty = beta * KL(π_current || π_reference)
 ---
 
 ## 7. Reward Functions
+
+All reward functions live in the `reward/` package (importable via `reward/__init__.py`). The GRPO trainer imports from here — no duplication.
 
 ### 7.1 Format Reward
 
@@ -723,10 +737,13 @@ def self_correction_rate(outputs, difficulty="hard"):
 **Purpose**: Combine LoRA adapters with base model for deployment.
 
 ```python
-# Load model
-model, tokenizer = FastLanguageModel.from_pretrained(model_path)
+# Auto-discover base model from adapter_config.json
+adapter_config = json.load(open("runs/grpo/adapter_config.json"))
+base_model_name = adapter_config["base_model_name_or_path"]
 
-# Merge LoRA weights
+# Load base model, then merge LoRA
+base_model = AutoModelForCausalLM.from_pretrained(base_model_name)
+model = PeftModel.from_pretrained(base_model, "runs/grpo")
 model = model.merge_and_unload()
 
 # Save merged model
@@ -734,7 +751,7 @@ model.save_pretrained(output_path)
 tokenizer.save_pretrained(output_path)
 ```
 
-**Output**: Full model in FP16 (~8GB for 4B model)
+**Output**: Full model in FP16 (~4GB for 2B model)
 
 ### 9.2 GGUF Quantization
 
@@ -745,10 +762,10 @@ tokenizer.save_pretrained(output_path)
 **Quantization levels**:
 | Method | Bits | Size | Quality |
 |--------|------|------|---------|
-| F16 | 16 | ~8GB | Perfect |
-| Q6_K | 6 | ~3.5GB | Near-perfect |
-| Q5_K_M | 5 | ~3.0GB | Very good |
-| Q4_K_M | 4 | ~2.5GB | Good |
+| F16 | 16 | ~4GB | Perfect |
+| Q6_K | 6 | ~2GB | Near-perfect |
+| Q5_K_M | 5 | ~1.8GB | Very good |
+| Q4_K_M | 4 | ~1.5GB | Good |
 
 ### 9.3 vLLM Serving
 
@@ -786,51 +803,31 @@ ollama run self-correcting-reasoner
 
 ## 10. Code Walkthrough
 
-### 10.1 Data Preparation (`data/gsm8k_prep.py`)
+### 10.1 Data Preparation (`data/prepare_all.py`)
 
-```python
-def extract_answer(answer_text):
-    """Extract numerical answer from GSM8K format."""
-    # GSM8K answers end with #### <number>
-    match = re.search(r"####\s*(.+)$", answer_text)
-    if match:
-        return match.group(1).strip()
-    return answer_text.strip()
-
-def create_reasoning_trace(question, solution):
-    """Create structured reasoning trace."""
-    answer = extract_answer(solution)
-    reasoning = re.sub(r"####\s*.+$", "", solution, flags=re.MULTILINE).strip()
-    
-    trace = f"""<thinking>
-{reasoning}
-</thinking>
-<answer>
-{answer}
-</answer>"""
-    
-    return trace
-```
+Loads 6 datasets, formats each with `<thinking>/<answer>` tags, saves individual JSONL files, then merges into `all_train.jsonl`. Each source has configurable caps to fit 24GB GPU training within 48 hours.
 
 ### 10.2 SFT Training (`train/sft_trainer.py`)
 
 Key steps:
 1. Check CUDA availability
-2. Load model with Unsloth/PEFT
-3. Prepare dataset with chat template
-4. Configure SFTTrainer
-5. Train with response-only masking
-6. Save checkpoints
+2. Load model with BitsAndBytes 4-bit quantization
+3. Add LoRA adapters via PEFT
+4. Prepare dataset with chat template
+5. Auto-detect TRL version for `max_seq_length` vs `max_length`
+6. Train with SFTTrainer
+7. Save checkpoints to `runs/sft/`
 
 ### 10.3 GRPO Training (`train/grpo_trainer.py`)
 
 Key steps:
-1. Load SFT checkpoint
-2. Prepare dataset (prompts + gold answers)
-3. Define reward function
-4. Configure GRPOTrainer
-5. Train with group sampling
+1. Load SFT checkpoint with QLoRA
+2. Prepare dataset (extract prompts + gold answers from metadata)
+3. Import `combined_reward` from `reward/` package
+4. Configure GRPOTrainer with `max_prompt_length` and `max_completion_length`
+5. Train with group sampling (K=8 generations per prompt)
 6. Monitor rewards and KL divergence
+7. Save to `runs/grpo/`
 
 ### 10.4 Evaluation (`eval/benchmark.py`)
 
@@ -849,7 +846,7 @@ Key steps:
 
 ```yaml
 # configs/sft_config.yaml
-base_model: "Qwen/Qwen3-4B"
+base_model: "Qwen/Qwen3.5-2B"
 sequence_len: 2048
 micro_batch_size: 2
 gradient_accumulation_steps: 8
@@ -890,11 +887,14 @@ reward_weights:
 | Format non-compliance | Reward too weak | Increase format weight |
 | GRPO instability | Learning rate too high | Reduce lr to 1e-6 |
 | Quantization degradation | Too aggressive | Use Q5_K_M instead of Q4_K_M |
+| SSL certificate error | Institutional proxy (e.g. IIT Mandi) | `export HF_HUB_DISABLE_SSL_VERIFICATION=1` and `export TRANSFORMERS_OFFLINE=1` |
+| `couldn't find remote ref main` | Git blocked by proxy | Use `scp` instead of `git pull` |
 
 ### VRAM Estimates
 
 | Model Size | FP16 | 4-bit QLoRA |
 |------------|------|-------------|
+| 2B | 4GB | 1.5GB |
 | 4B | 8GB | 2.5GB |
 | 7B | 14GB | 4GB |
 | 13B | 26GB | 7GB |
@@ -908,5 +908,6 @@ reward_weights:
 3. **LoRA**: Hu et al. "LoRA: Low-Rank Adaptation of Large Language Models" (2021)
 4. **GSM8K**: Cobbe et al. "Training Verifiers to Solve Math Word Problems" (2021)
 5. **MATH**: Hendrycks et al. "Measuring Mathematical Problem Solving With the MATH Dataset" (2021)
-6. **Unsloth**: https://github.com/unslothai/unsloth
-7. **TRL**: https://github.com/huggingface/trl
+6. **TRL**: https://github.com/huggingface/trl
+7. **PEFT**: https://github.com/huggingface/peft
+8. **math-verify**: https://github.com/hendrycks/math-verify
