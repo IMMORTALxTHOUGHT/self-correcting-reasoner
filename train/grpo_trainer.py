@@ -110,6 +110,7 @@ def train(
     max_steps: Optional[int] = None,
     vllm_gpu_memory_utilization: float = 0.3,
     use_wandb: bool = False,
+    vllm_kwargs: Optional[dict] = None,
 ):
     """Run GRPO training."""
 
@@ -148,16 +149,32 @@ def train(
         beta=beta,
         temperature=1.0,
         top_p=0.95,
-        # --- Speed: generate completions with a vLLM engine instead of the
-        # training model in eager mode. This is the single biggest GRPO speedup
-        # on a single GPU. Keep util low enough to leave room for the training
-        # model + reference model + optimizer in the remaining VRAM.
-        vllm_device="cuda:0",
-        vllm_gpu_memory_utilization=vllm_gpu_memory_utilization,
+        # --- Speed: when the installed TRL supports it, generate completions
+        # with a vLLM engine instead of the training model in eager mode (the
+        # single biggest GRPO speedup on one GPU). Different TRL versions expose
+        # these under different names, so only pass what this version accepts.
         generation_batch_size=8,  # batch the N generations per prompt together
         report_to=["tensorboard"] + (["wandb"] if use_wandb else []),
         run_name="grpo-reasoner",
     )
+
+    # Attach vLLM generation args only if GRPOConfig understands them. If the
+    # installed TRL is older (no vllm_device / vllm_gpu_memory_utilization),
+    # generation falls back to eager mode and we warn instead of crashing.
+    _vllm_defaults = {
+        "vllm_device": "cuda:0",
+        "vllm_gpu_memory_utilization": vllm_gpu_memory_utilization,
+    }
+    if vllm_kwargs:
+        _vllm_defaults.update(vllm_kwargs)
+    _grpo_fields = {f.name for f in dataclass_fields(GRPOConfig)}
+    _vllm_supported = [k for k in _vllm_defaults if k in _grpo_fields]
+    for k in _vllm_supported:
+        setattr(training_args, k, _vllm_defaults[k])
+    if _vllm_defaults and not _vllm_supported:
+        print("WARNING: installed TRL GRPOConfig has no vLLM args "
+              "(vllm_device/vllm_gpu_memory_utilization); generation will run "
+              "in eager mode (slower). Upgrade TRL to enable the vLLM backend.")
 
     if max_steps is not None:
         training_args.max_steps = max_steps
