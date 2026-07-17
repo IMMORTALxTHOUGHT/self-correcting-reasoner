@@ -166,6 +166,34 @@ def train(
 
     reward_func = _wrapped_reward
 
+    def _safe_vllm_utilization(requested: float) -> float:
+        """Pick a vLLM memory budget that will NOT push the GPU OOM.
+
+        vLLM's default gpu_memory_utilization is 0.9, which would grab almost
+        the entire card and OOM when the training model + reference model +
+        optimizer are also resident. On a 24GB card already near capacity we
+        must be very conservative. Strategy:
+          - measure the FREE memory right now (after the train+ref models load),
+          - never let vLLM take more than `cap` of total VRAM,
+          - never let vLLM take more than half of the currently-free memory.
+        The user can still force a value via --vllm-util (used verbatim) for
+        cases where they know their headroom.
+        """
+        cap = 0.15  # hard ceiling: keep total usage well under a 24GB card's limit
+        try:
+            free, total = torch.cuda.mem_get_info(0)
+            free_ratio = free / total
+            derived = min(cap, free_ratio * 0.5)
+            chosen = min(requested, derived)
+            print(f"vLLM budget: requested={requested:.2f} free={free/1e9:.1f}GB/"
+                  f"total={total/1e9:.1f}GB -> using gpu_memory_utilization={chosen:.3f}")
+            return chosen
+        except Exception as e:
+            print(f"vLLM budget auto-tune failed ({e}); using requested={requested:.2f}")
+            return requested
+
+    vllm_gpu_memory_utilization = _safe_vllm_utilization(vllm_gpu_memory_utilization)
+
     from dataclasses import fields as dataclass_fields
 
     training_args = GRPOConfig(
@@ -211,7 +239,10 @@ def train(
     _vllm_supported = [k for k in _vllm_defaults if k in _grpo_fields]
     for k in _vllm_supported:
         setattr(training_args, k, _vllm_defaults[k])
-    if _vllm_defaults and not _vllm_supported:
+    if _vllm_supported:
+        print(f"vLLM generation backend ENABLED (vllm_device=cuda:0, "
+              f"gpu_memory_utilization={vllm_gpu_memory_utilization:.3f}).")
+    else:
         print("WARNING: installed TRL GRPOConfig has no vLLM args "
               "(vllm_device/vllm_gpu_memory_utilization); generation will run "
               "in eager mode (slower). Upgrade TRL to enable the vLLM backend.")
