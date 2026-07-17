@@ -123,12 +123,48 @@ def train(
     model, tokenizer = load_model(model_path)
     dataset = prepare_dataset(dataset_path, tokenizer, max_seq_length)
 
-    def reward_func(completions, **kwargs):
+    def _to_text(comp):
+        """Normalize any completion shape TRL may pass into plain text.
+
+        Handles: str, {'content'/'text': ...}, [{'content': ...}],
+        and [{'role','content'}, ...] chat-message lists."""
+        try:
+            if isinstance(comp, str):
+                return comp
+            if isinstance(comp, dict):
+                if "content" in comp:
+                    return comp["content"]
+                if "text" in comp:
+                    return comp["text"]
+                return str(comp)
+            if isinstance(comp, (list, tuple)):
+                if not comp:
+                    return ""
+                # Chat messages: [{'role', 'content'}, ...]
+                if isinstance(comp[0], dict) and "role" in comp[0]:
+                    return "\n".join(
+                        m.get("content", "") for m in comp if isinstance(m, dict)
+                    )
+                # [{'content': ...}] or [str, ...]
+                return "\n".join(_to_text(c) for c in comp)
+            return str(comp)
+        except Exception:
+            return str(comp)
+
+    def _wrapped_reward(completions, **kwargs):
         # TRL passes each dataset column through as a kwarg list; `answer` holds
-        # the gold answers. Passing None lets the reward degrade gracefully
-        # (format + self-correction only) if answers are ever missing.
+        # the gold answers. Normalize completions to plain text first so the
+        # reward package (which expects text) always sees real content.
+        texts = [_to_text(c) for c in completions]
         reward_fn = graded_combined_reward if use_graded_reward else combined_reward
-        return reward_fn(completions, answers=kwargs.get("answer"))
+        try:
+            return reward_fn(texts, answers=kwargs.get("answer"))
+        except Exception as e:
+            # Fail loud instead of silently returning all-zero rewards.
+            print(f"ERROR in reward function: {type(e).__name__}: {e}")
+            raise
+
+    reward_func = _wrapped_reward
 
     from dataclasses import fields as dataclass_fields
 
