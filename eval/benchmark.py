@@ -131,15 +131,21 @@ def sample_generations(
     import torch
 
     tok = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    # Force GPU (device_map="auto" can offload to CPU when VRAM looks full and
+    # make generation ~100x slower). A 2B bf16 model is ~4GB and fits easily
+    # on a 24GB card in a fresh process.
+    torch.cuda.empty_cache()
     model = AutoModelForCausalLM.from_pretrained(
-        model_path, torch_dtype=torch.bfloat16, device_map="auto", trust_remote_code=True
-    )
+        model_path, torch_dtype=torch.bfloat16, trust_remote_code=True
+    ).to("cuda")
     model.eval()
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
+    eos_id = tok.eos_token_id
 
     results = []
-    for p in prompts:
+    total = len(prompts)
+    for i, p in enumerate(prompts):
         ids = tok.apply_chat_template(
             [{"role": "user", "content": p}], add_generation_prompt=True, return_tensors="pt"
         ).input_ids.squeeze(0).to(model.device)
@@ -156,12 +162,15 @@ def sample_generations(
                     top_p=top_p,
                     max_new_tokens=max_tokens,
                     num_return_sequences=k,
+                    eos_token_id=eos_id,
                     pad_token_id=tok.pad_token_id,
                 )
             for seq in out:
                 gens.append(tok.decode(seq[prompt_len:], skip_special_tokens=True))
             remaining -= k
         results.append(gens)
+        if (i + 1) % 25 == 0 or (i + 1) == total:
+            print(f"  generated {i + 1}/{total}")
     return results
 
 

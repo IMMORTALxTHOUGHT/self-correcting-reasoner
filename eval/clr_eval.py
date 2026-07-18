@@ -66,9 +66,13 @@ def _get_model(model_path: str):
         from transformers import AutoModelForCausalLM, AutoTokenizer
         import torch
         _TOK = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        # Force GPU: device_map="auto" can offload to CPU when VRAM looks full
+        # and make generation ~100x slower. A 2B bf16 model (~4GB) fits a 24GB
+        # card easily in a fresh process.
+        torch.cuda.empty_cache()
         _MODEL = AutoModelForCausalLM.from_pretrained(
-            model_path, torch_dtype=torch.bfloat16, device_map="auto", trust_remote_code=True
-        )
+            model_path, torch_dtype=torch.bfloat16, trust_remote_code=True
+        ).to("cuda")
         _MODEL.eval()
         if _TOK.pad_token is None:
             _TOK.pad_token = _TOK.eos_token
@@ -147,12 +151,14 @@ def clr_score(
         prompt_len = ids.size(0)
         traces = []
         remaining = K
+        eos_id = tok.eos_token_id
         while remaining > 0:
             k = min(8, remaining)
             with torch.no_grad():
                 out = model.generate(
                     ids.unsqueeze(0), do_sample=True, temperature=1.0, top_p=0.95,
-                    max_new_tokens=2048, num_return_sequences=k, pad_token_id=tok.pad_token_id,
+                    max_new_tokens=2048, num_return_sequences=k,
+                    eos_token_id=eos_id, pad_token_id=tok.pad_token_id,
                 )
             for seq in out:
                 traces.append(tok.decode(seq[prompt_len:], skip_special_tokens=True))
