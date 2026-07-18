@@ -33,16 +33,21 @@ def merge_lora(
     from transformers import AutoModelForCausalLM, AutoTokenizer
     from peft import PeftModel
 
-    # Load the adapter config to discover the base model name
-    adapter_config_path = Path(model_path) / "adapter_config.json"
-    if adapter_config_path.exists():
-        with open(adapter_config_path) as f:
-            base_model_name = json.load(f).get("base_model_name_or_path", model_path)
-    else:
-        base_model_name = model_path
+    # Resolve the *real* base model by climbing adapter_config.json chains.
+    # A GRPO adapter's base may itself be an SFT adapter dir (also a LoRA),
+    # whose base is the actual HF model. Collect the chain of adapter dirs in
+    # order (outermost first), ending at the true base model name/path.
+    adapter_chain = []
+    current = Path(model_path)
+    while (current / "adapter_config.json").exists():
+        with open(current / "adapter_config.json") as f:
+            base = json.load(f).get("base_model_name_or_path", str(current))
+        adapter_chain.append(str(current))
+        current = Path(base)
+    base_model_name = str(current)
 
     print(f"  Base model: {base_model_name}")
-    print(f"  Adapters:   {model_path}")
+    print(f"  Adapter chain: {' -> '.join(adapter_chain)}")
 
     tokenizer = AutoTokenizer.from_pretrained(base_model_name, trust_remote_code=True)
     base_model = AutoModelForCausalLM.from_pretrained(
@@ -52,8 +57,10 @@ def merge_lora(
         trust_remote_code=True,
     )
 
-    model = PeftModel.from_pretrained(base_model, model_path)
-    model = model.merge_and_unload()
+    # Stack each adapter in chain order, then merge them all into the base.
+    for adapter_dir in adapter_chain:
+        base_model = PeftModel.from_pretrained(base_model, adapter_dir)
+    model = base_model.merge_and_unload()
 
     print("Model merged via peft")
 
