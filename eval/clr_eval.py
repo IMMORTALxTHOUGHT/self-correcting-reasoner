@@ -31,6 +31,50 @@ def extract_boxed(text: str) -> str:
     return text.strip()
 
 
+def extract_final_answer(text: str) -> str:
+    """Robust answer extraction mirroring the GRPO reward (markdown-aware)."""
+    if not text:
+        return ""
+    m = re.search(r"<answer>(.*?)</answer>", text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"\\boxed\{(.*?)\}", text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    bolds = re.findall(r"\*\*(.+?)\*\*", text)
+    if bolds and re.search(r"\d", bolds[-1]):
+        return bolds[-1].strip()
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if lines:
+        nums = re.findall(r"\$?-?[\d,]+(?:\.\d+)?", lines[-1])
+        if nums:
+            return nums[-1].replace(",", "")
+    all_nums = re.findall(r"\$?-?[\d,]+(?:\.\d+)?", text)
+    if all_nums:
+        return all_nums[-1].replace(",", "")
+    return ""
+
+
+# Lazily-loaded model cache so we load the HF model once per process.
+_MODEL = None
+_TOK = None
+
+
+def _get_model(model_path: str):
+    global _MODEL, _TOK
+    if _MODEL is None:
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        import torch
+        _TOK = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        _MODEL = AutoModelForCausalLM.from_pretrained(
+            model_path, torch_dtype=torch.bfloat16, device_map="auto", trust_remote_code=True
+        )
+        _MODEL.eval()
+        if _TOK.pad_token is None:
+            _TOK.pad_token = _TOK.eos_token
+    return _MODEL, _TOK
+
+
 def extract_claims(trace: str, max_claims: int = 5) -> List[str]:
     """
     Extract decision-relevant claims from a reasoning trace.
@@ -46,18 +90,14 @@ def extract_claims(trace: str, max_claims: int = 5) -> List[str]:
     return claims[:max_claims]
 
 
-def verify_claim(model, claim: str, context: str) -> bool:
+def verify_claim(model_path: str, claim: str, context: str) -> bool:
     """
     Verify a claim using the model itself (self-verification).
-    
-    Args:
-        model: Model for verification
-        claim: Claim to verify
-        context: Full reasoning context
-        
-    Returns:
-        True if claim is verified, False otherwise
+
+    Uses the cached transformers model (vLLM mis-registers the custom Qwen3.5
+    config as multimodal and crashes). Returns True if the model says TRUE.
     """
+    model, tok = _get_model(model_path)
     prompt = f"""Given the following solution:
 {context}
 
@@ -65,22 +105,16 @@ Is the following claim true or false?
 Claim: {claim}
 
 Answer only TRUE or FALSE."""
-    
-    # Generate verification
-    try:
-        from vllm import LLM, SamplingParams
-        
-        llm = LLM(model=model, tensor_parallel_size=1)
-        sampling_params = SamplingParams(temperature=0.0, max_tokens=10)
-        
-        outputs = llm.generate([prompt], sampling_params)
-        response = outputs[0].outputs[0].text.upper()
-        
-        return "TRUE" in response
-        
-    except Exception:
-        # Fallback: simple heuristic
-        return True
+    ids = tok.apply_chat_template(
+        [{"role": "user", "content": prompt}], add_generation_prompt=True, return_tensors="pt"
+    ).squeeze(0).to(model.device)
+    with torch.no_grad():
+        out = model.generate(
+            ids.unsqueeze(0), do_sample=False, temperature=0.0,
+            max_new_tokens=10, pad_token_id=tok.pad_token_id,
+        )
+    response = tok.decode(out[0][ids.size(0):], skip_special_tokens=True).upper()
+    return "TRUE" in response
 
 
 def clr_score(
@@ -103,18 +137,28 @@ def clr_score(
     Returns:
         CLR score (0.0 to 1.0)
     """
-    # Sample K traces
+    # Sample K traces with the cached transformers model (chunked to bound VRAM).
     try:
-        from vllm import LLM, SamplingParams
-        
-        llm = LLM(model=model_path, tensor_parallel_size=1, max_model_len=4096)
-        sampling_params = SamplingParams(temperature=1.0, top_p=0.95, n=K, max_tokens=2048)
-        
-        outputs = llm.generate([prompt], sampling_params)
-        traces = [out.text for out in outputs[0].outputs]
-        
-    except ImportError:
-        print("vLLM not available, using placeholder traces")
+        from transformers import AutoModelForCausalLM  # noqa: F401
+        model, tok = _get_model(model_path)
+        ids = tok.apply_chat_template(
+            [{"role": "user", "content": prompt}], add_generation_prompt=True, return_tensors="pt"
+        ).squeeze(0).to(model.device)
+        prompt_len = ids.size(0)
+        traces = []
+        remaining = K
+        while remaining > 0:
+            k = min(8, remaining)
+            with torch.no_grad():
+                out = model.generate(
+                    ids.unsqueeze(0), do_sample=True, temperature=1.0, top_p=0.95,
+                    max_new_tokens=2048, num_return_sequences=k, pad_token_id=tok.pad_token_id,
+                )
+            for seq in out:
+                traces.append(tok.decode(seq[prompt_len:], skip_special_tokens=True))
+            remaining -= k
+    except Exception as e:
+        print(f"Trace sampling failed ({e}); using placeholder traces")
         traces = [f"Placeholder trace {i}" for i in range(K)]
     
     # Verify claims in each trace
@@ -138,7 +182,7 @@ def clr_score(
     # Cluster by extracted answer
     buckets = defaultdict(float)
     for trace, score in zip(traces, scores):
-        answer = extract_boxed(trace)
+        answer = extract_final_answer(trace)
         buckets[answer] += score
     
     # Pick answer with highest reliability sum
