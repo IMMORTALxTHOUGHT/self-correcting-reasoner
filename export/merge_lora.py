@@ -3,11 +3,11 @@
 Merge LoRA Adapters
 
 Merges LoRA adapters back into the base model for deployment.
+Supports chained adapters (e.g. runs/grpo -> runs/sft -> Qwen/Qwen3.5-2B).
 """
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 import torch
@@ -17,16 +17,18 @@ def merge_lora(
     model_path: str,
     output_path: str,
     push_to_hub: bool = False,
-    hub_repo: str = None,
-):
+    hub_repo: str | None = None,
+) -> None:
     """
     Merge LoRA adapters into base model.
 
     Args:
-        model_path: Path to model with LoRA adapters
-        output_path: Path to save merged model
-        push_to_hub: Whether to push to Hugging Face Hub
-        hub_repo: Hub repository name
+        model_path: Path to model/LoRA adapter. If the adapter's
+            base_model_name_or_path is itself a LoRA dir (e.g. GRPO on top
+            of SFT), the chain is resolved automatically to the real HF base.
+        output_path: Directory to save the merged full model.
+        push_to_hub: If True, push the merged model to the HuggingFace Hub.
+        hub_repo: Hub repo id (e.g. USERNAME/my-model), required if push_to_hub.
     """
     print(f"Loading model from {model_path}...")
 
@@ -34,10 +36,7 @@ def merge_lora(
     from peft import PeftModel
 
     # Resolve the *real* base model by climbing adapter_config.json chains.
-    # A GRPO adapter's base may itself be an SFT adapter dir (also a LoRA),
-    # whose base is the actual HF model. Collect the chain of adapter dirs in
-    # order (outermost first), ending at the true base model name/path.
-    adapter_chain = []
+    adapter_chain: list[str] = []
     current = Path(model_path)
     while (current / "adapter_config.json").exists():
         with open(current / "adapter_config.json") as f:
@@ -62,7 +61,7 @@ def merge_lora(
         base_model = PeftModel.from_pretrained(base_model, adapter_dir)
     model = base_model.merge_and_unload()
 
-    print("Model merged via peft")
+    print("Model merged via PEFT")
 
     # Save merged model
     print(f"\nSaving merged model to {output_path}...")
@@ -71,44 +70,29 @@ def merge_lora(
 
     model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)
-
     print(f"Merged model saved to {output_path}")
 
     # Push to Hub if requested
     if push_to_hub and hub_repo:
         print(f"\nPushing to Hub: {hub_repo}...")
-        model.push_to_hub(hub_repo, tokenizer=tokenizer)
-        print(f"Model pushed to https://huggingface.co/{hub_repo}")
-
-    # Save metadata
-    metadata = {
-        "model_path": model_path,
-        "output_path": output_path,
-        "base_model": base_model_name,
-        "pushed_to_hub": push_to_hub,
-        "hub_repo": hub_repo,
-    }
-
-    metadata_file = output_dir / "merge_metadata.json"
-    with open(metadata_file, "w") as f:
-        json.dump(metadata, f, indent=2)
-
-    print(f"\nMetadata saved to {metadata_file}")
-    return model, tokenizer
+        try:
+            model.push_to_hub(hub_repo, tokenizer=tokenizer)
+            print(f"  Pushed: {hub_repo}")
+        except Exception as e:
+            print(f"  ERROR pushing to hub: {e}")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Merge LoRA Adapters")
-    parser.add_argument("--model", required=True, help="Path to model with LoRA")
-    parser.add_argument("--output", required=True, help="Output path for merged model")
-    parser.add_argument("--push-to-hub", action="store_true", help="Push to Hub")
-    parser.add_argument("--hub-repo", help="Hub repository name")
-
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Merge LoRA adapters into base model")
+    parser.add_argument("--model", required=True,
+                        help="Path to model/LoRA adapter (supports chains like runs/grpo)")
+    parser.add_argument("--output", required=True,
+                        help="Output directory for merged model")
+    parser.add_argument("--push-to-hub", action="store_true",
+                        help="Push merged model to HuggingFace Hub")
+    parser.add_argument("--hub-repo",
+                        help="Hub repo id (e.g. USERNAME/my-model)")
     args = parser.parse_args()
-
-    if args.push_to_hub and not args.hub_repo:
-        print("ERROR: --hub-repo required when using --push-to-hub")
-        sys.exit(1)
 
     merge_lora(
         model_path=args.model,
@@ -120,3 +104,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
