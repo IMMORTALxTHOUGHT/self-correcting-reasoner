@@ -107,7 +107,7 @@ Claim: {claim}
 Answer only TRUE or FALSE."""
     ids = tok.apply_chat_template(
         [{"role": "user", "content": prompt}], add_generation_prompt=True, return_tensors="pt"
-    ).squeeze(0).to(model.device)
+    ).input_ids.squeeze(0).to(model.device)
     with torch.no_grad():
         out = model.generate(
             ids.unsqueeze(0), do_sample=False, temperature=0.0,

@@ -142,7 +142,7 @@ def sample_generations(
     for p in prompts:
         ids = tok.apply_chat_template(
             [{"role": "user", "content": p}], add_generation_prompt=True, return_tensors="pt"
-        ).squeeze(0).to(model.device)
+        ).input_ids.squeeze(0).to(model.device)
         prompt_len = ids.size(0)
         gens = []
         remaining = n
