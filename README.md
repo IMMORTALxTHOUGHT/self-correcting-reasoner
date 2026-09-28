@@ -67,3 +67,4 @@ python export/quantize_gguf.py --model merged_model/
 4. CLR score ≥ 0.8
 5. Quantization retention ≥ 95%
 # CAT tick 2026-09-27_18:51:25 tick=1790535085
+# CAT tick 2026-09-28_12:30:28 tick=1790598628
