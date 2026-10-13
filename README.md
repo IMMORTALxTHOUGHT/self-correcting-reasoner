@@ -104,3 +104,5 @@ python export/quantize_gguf.py --model merged_model/
 # CAT tick 2026-10-12_16:32:43
 
 # CAT tick 2026-10-13_06:35:04
+
+# CAT tick 2026-10-13_17:05:01
